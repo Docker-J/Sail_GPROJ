@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -39,24 +39,10 @@
 #include "acpuclock-krait.h"
 #include "avs.h"
 
-#ifdef CONFIG_LGE_PM_LOW_BATT_CHG
-#include <mach/board_lge.h>
-#endif
-
 /* MUX source selects. */
 #define PRI_SRC_SEL_SEC_SRC	0
 #define PRI_SRC_SEL_HFPLL	1
 #define PRI_SRC_SEL_HFPLL_DIV2	2
-
-#define SECCLKAGD		BIT(4)
-
-int g_speed_bin;
-int g_pvs_bin;
-
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)\
-		|| defined(CONFIG_MACH_APQ8064_GVDCM) || defined(CONFIG_MACH_APQ8064_GV_KR) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
-int limit_cpufreq = 0;
-#endif
 
 static DEFINE_MUTEX(driver_lock);
 static DEFINE_SPINLOCK(l2_lock);
@@ -121,20 +107,10 @@ static void __cpuinit set_sec_clk_src(struct scalable *sc, u32 sec_src_sel)
 {
 	u32 regval;
 
-	/* 8064 Errata: disable sec_src clock gating during switch. */
 	regval = get_l2_indirect_reg(sc->l2cpmr_iaddr);
-	regval |= SECCLKAGD;
-	set_l2_indirect_reg(sc->l2cpmr_iaddr, regval);
-
-	/* Program the MUX */
 	regval &= ~(0x3 << 2);
 	regval |= ((sec_src_sel & 0x3) << 2);
 	set_l2_indirect_reg(sc->l2cpmr_iaddr, regval);
-
-	/* 8064 Errata: re-enabled sec_src clock gating. */
-	regval &= ~SECCLKAGD;
-	set_l2_indirect_reg(sc->l2cpmr_iaddr, regval);
-
 	/* Wait for switch to complete. */
 	mb();
 	udelay(1);
@@ -256,7 +232,8 @@ static void set_bus_bw(unsigned int bw)
 }
 
 /* Set the CPU or L2 clock speed. */
-static void set_speed(struct scalable *sc, const struct core_speed *tgt_s)
+static void set_speed(struct scalable *sc, const struct core_speed *tgt_s,
+	bool skip_regulators)
 {
 	const struct core_speed *strt_s = sc->cur_speed;
 
@@ -279,10 +256,10 @@ static void set_speed(struct scalable *sc, const struct core_speed *tgt_s)
 		set_pri_clk_src(sc, tgt_s->pri_src_sel);
 	} else if (strt_s->src == HFPLL && tgt_s->src != HFPLL) {
 		set_pri_clk_src(sc, tgt_s->pri_src_sel);
-		hfpll_disable(sc, false);
+		hfpll_disable(sc, skip_regulators);
 	} else if (strt_s->src != HFPLL && tgt_s->src == HFPLL) {
 		hfpll_set_rate(sc, tgt_s);
-		hfpll_enable(sc, false);
+		hfpll_enable(sc, skip_regulators);
 		set_pri_clk_src(sc, tgt_s->pri_src_sel);
 	}
 
@@ -473,6 +450,47 @@ static int calculate_vdd_core(const struct acpu_level *tgt)
 	return tgt->vdd_core + (enable_boost ? drv.boost_uv : 0);
 }
 
+static DEFINE_MUTEX(l2_regulator_lock);
+static int l2_vreg_count;
+
+static int enable_l2_regulators(void)
+{
+	int ret = 0;
+
+	mutex_lock(&l2_regulator_lock);
+	if (l2_vreg_count == 0) {
+		ret = enable_rpm_vreg(&drv.scalable[L2].vreg[VREG_HFPLL_A]);
+		if (ret)
+			goto out;
+		ret = enable_rpm_vreg(&drv.scalable[L2].vreg[VREG_HFPLL_B]);
+		if (ret) {
+			disable_rpm_vreg(&drv.scalable[L2].vreg[VREG_HFPLL_A]);
+			goto out;
+		}
+	}
+	l2_vreg_count++;
+out:
+	mutex_unlock(&l2_regulator_lock);
+
+	return ret;
+}
+
+static void disable_l2_regulators(void)
+{
+	mutex_lock(&l2_regulator_lock);
+
+	if (WARN(!l2_vreg_count, "L2 regulator votes are unbalanced!"))
+		goto out;
+
+	if (l2_vreg_count == 1) {
+		disable_rpm_vreg(&drv.scalable[L2].vreg[VREG_HFPLL_B]);
+		disable_rpm_vreg(&drv.scalable[L2].vreg[VREG_HFPLL_A]);
+	}
+	l2_vreg_count--;
+out:
+	mutex_unlock(&l2_regulator_lock);
+}
+
 /* Set the CPU's clock rate and adjust the L2 rate, voltage and BW requests. */
 static int acpuclk_krait_set_rate(int cpu, unsigned long rate,
 				  enum setrate_reason reason)
@@ -480,16 +498,11 @@ static int acpuclk_krait_set_rate(int cpu, unsigned long rate,
 	const struct core_speed *strt_acpu_s, *tgt_acpu_s;
 	const struct acpu_level *tgt;
 	int tgt_l2_l;
+	enum src_id prev_l2_src = NUM_SRC_ID;
 	struct vdd_data vdd_data;
-	unsigned long flags;
+	bool skip_regulators;
 	int rc = 0;
 
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)\
-		|| defined(CONFIG_MACH_APQ8064_GVDCM) || defined(CONFIG_MACH_APQ8064_GV_KR) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
-	if(limit_cpufreq) {
-		if(rate > 1242000) rate = 1242000;	
-	}
-#endif
 	if (cpu > num_possible_cpus())
 		return -EINVAL;
 
@@ -531,13 +544,31 @@ static int acpuclk_krait_set_rate(int cpu, unsigned long rate,
 		rc = increase_vdd(cpu, &vdd_data, reason);
 		if (rc)
 			goto out;
+
+		prev_l2_src =
+			drv.l2_freq_tbl[drv.scalable[cpu].l2_vote].speed.src;
+		/* Vote for the L2 regulators here if necessary. */
+		if (drv.l2_freq_tbl[tgt->l2_level].speed.src == HFPLL) {
+			rc = enable_l2_regulators();
+			if (rc)
+				goto out;
+		}
 	}
 
 	dev_dbg(drv.dev, "Switching from ACPU%d rate %lu KHz -> %lu KHz\n",
 		cpu, strt_acpu_s->khz, tgt_acpu_s->khz);
 
+	/*
+	 * If we are setting the rate as part of power collapse or in the resume
+	 * path after power collapse, skip the vote for the HFPLL regulators,
+	 * which are active-set-only votes that will be removed when apps enters
+	 * its sleep set. This is needed to avoid voting for regulators with
+	 * sleeping APIs from an atomic context.
+	 */
+	skip_regulators = (reason == SETRATE_PC);
+
 	/* Set the new CPU speed. */
-	set_speed(&drv.scalable[cpu], tgt_acpu_s);
+	set_speed(&drv.scalable[cpu], tgt_acpu_s, skip_regulators);
 
 	/*
 	 * Update the L2 vote and apply the rate change. A spinlock is
@@ -546,14 +577,22 @@ static int acpuclk_krait_set_rate(int cpu, unsigned long rate,
 	 * called from an atomic context and the driver_lock mutex is not
 	 * acquired.
 	 */
-	spin_lock_irqsave(&l2_lock, flags);
+	spin_lock(&l2_lock);
 	tgt_l2_l = compute_l2_level(&drv.scalable[cpu], tgt->l2_level);
-	set_speed(&drv.scalable[L2], &drv.l2_freq_tbl[tgt_l2_l].speed);
-	spin_unlock_irqrestore(&l2_lock, flags);
+	set_speed(&drv.scalable[L2],
+			&drv.l2_freq_tbl[tgt_l2_l].speed, true);
+	spin_unlock(&l2_lock);
 
 	/* Nothing else to do for power collapse or SWFI. */
 	if (reason == SETRATE_PC || reason == SETRATE_SWFI)
 		goto out;
+
+	/*
+	 * Remove the vote for the L2 HFPLL regulators only if the L2
+	 * was already on an HFPLL source.
+	 */
+	if (prev_l2_src == HFPLL)
+		disable_l2_regulators();
 
 	/* Update bus bandwith request. */
 	set_bus_bw(drv.l2_freq_tbl[tgt_l2_l].bw_level);
@@ -581,7 +620,7 @@ static struct acpuclk_data acpuclk_krait_data = {
 };
 
 /* Initialize a HFPLL at a given rate and enable it. */
-static void __init hfpll_init(struct scalable *sc,
+static void __cpuinit hfpll_init(struct scalable *sc,
 			      const struct core_speed *tgt_s)
 {
 	dev_dbg(drv.dev, "Initializing HFPLL%d\n", sc - drv.scalable);
@@ -715,6 +754,14 @@ static int __cpuinit regulator_init(struct scalable *sc,
 		goto err_core_conf;
 	}
 
+	/*
+	 * Increment the L2 HFPLL regulator refcount if _this_ CPU's frequency
+	 * requires a corresponding target L2 frequency that needs the L2 to
+	 * run off of an HFPLL.
+	 */
+	if (drv.l2_freq_tbl[acpu_level->l2_level].speed.src == HFPLL)
+		l2_vreg_count++;
+
 	return 0;
 
 err_core_conf:
@@ -840,22 +887,16 @@ static int __cpuinit per_cpu_init(int cpu)
 	}
 
 	acpu_level = find_cur_acpu_level(cpu);
-#ifdef CONFIG_LGE_PM_LOW_BATT_CHG
-	/* chargerlogo wants min cpu freq */
-	if(!acpu_level || lge_get_charger_logo_state())
-#else
-	if (!acpu_level)
-#endif
-	{
+	if (!acpu_level) {
 		acpu_level = find_min_acpu_level();
 		if (!acpu_level) {
 			ret = -ENODEV;
 			goto err_table;
 		}
-		dev_info(drv.dev, "CPU%d is running at an unknown rate. Defaulting to %lu KHz.\n",
+		dev_dbg(drv.dev, "CPU%d is running at an unknown rate. Defaulting to %lu KHz.\n",
 			cpu, acpu_level->speed.khz);
 	} else {
-		dev_info(drv.dev, "CPU%d is running at %lu KHz\n", cpu,
+		dev_dbg(drv.dev, "CPU%d is running at %lu KHz\n", cpu,
 			acpu_level->speed.khz);
 	}
 
@@ -1023,8 +1064,6 @@ static int __init get_speed_bin(u32 pte_efuse)
 		dev_info(drv.dev, "SPEED BIN: %d\n", speed_bin);
 	}
 
-	g_speed_bin = speed_bin;
-
 	return speed_bin;
 }
 
@@ -1042,8 +1081,6 @@ static int __init get_pvs_bin(u32 pte_efuse)
 	} else {
 		dev_info(drv.dev, "ACPU PVS: %d\n", pvs_bin);
 	}
-
-	g_pvs_bin = pvs_bin;
 
 	return pvs_bin;
 }
@@ -1122,7 +1159,6 @@ static void __init hw_init(void)
 	rc = rpm_regulator_init(l2, VREG_HFPLL_A,
 				l2->vreg[VREG_HFPLL_A].max_vdd, false);
 	BUG_ON(rc);
-
 	rc = rpm_regulator_init(l2, VREG_HFPLL_B,
 				l2->vreg[VREG_HFPLL_B].max_vdd, false);
 	BUG_ON(rc);
@@ -1143,7 +1179,6 @@ static void __init hw_init(void)
 	for_each_online_cpu(cpu) {
 		rc = per_cpu_init(cpu);
 		BUG_ON(rc);
-
 	}
 
 	bus_init(l2_level);
