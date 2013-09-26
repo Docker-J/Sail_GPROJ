@@ -28,8 +28,6 @@
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 
-#include <trace/events/power.h>
-
 /*
  * dbs is used in this file as a shortform for demandbased switching
  * It helps to keep variable names smaller, simpler
@@ -762,14 +760,6 @@ static void dbs_check_cpu(struct cpu_dbs_info_s *this_dbs_info)
 
 	/* Get Absolute Load - in terms of freq */
 	max_load_freq = 0;
-/* for sanity check for dbs.. */
-#ifdef CONFIG_LGE_PM
-    if(policy==NULL)
-    {
-        printk(KERN_ERR "policy is not set please check drivers\n");
-        return;
-    }
-#endif
 
 	for_each_cpu(j, policy->cpus) {
 		struct cpu_dbs_info_s *j_dbs_info;
@@ -982,14 +972,6 @@ static void do_dbs_timer(struct work_struct *work)
 			dbs_info->freq_lo, CPUFREQ_RELATION_H);
 		delay = dbs_info->freq_lo_jiffies;
 	}
-	if (dbs_info->cur_policy != NULL)
-		trace_cpufreq_sampling_event(cpu,
-			dbs_info->cur_policy->cur,
-			dbs_info->prev_load);
-	else
-		trace_cpufreq_sampling_event(cpu,
-			0, dbs_info->prev_load);
-
 	queue_delayed_work_on(cpu, dbs_wq, &dbs_info->work, delay);
 	mutex_unlock(&dbs_info->timer_mutex);
 }
@@ -1176,8 +1158,6 @@ static int dbs_sync_thread(void *data)
 			queue_delayed_work_on(cpu, dbs_wq,
 					      &this_dbs_info->work, delay);
 			mutex_unlock(&this_dbs_info->timer_mutex);
-			trace_cpufreq_freq_synced(cpu,
-				policy->cur, this_dbs_info->prev_load);
 		}
 
 bail_incorrect_governor:
@@ -1360,7 +1340,6 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_STOP:
-
 		dbs_timer_exit(this_dbs_info);
 
 		mutex_lock(&dbs_mutex);
@@ -1390,7 +1369,6 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
-
 		mutex_lock(&this_dbs_info->timer_mutex);
 		if (policy->max < this_dbs_info->cur_policy->cur)
 			__cpufreq_driver_target(this_dbs_info->cur_policy,
@@ -1439,8 +1417,6 @@ static int __init cpufreq_gov_dbs_init(void)
 		printk(KERN_ERR "Failed to create ondemand_dbs_wq workqueue\n");
 		return -EFAULT;
 	}
-	printk(KERN_ERR "Create iewq workqueue\n");
-
 	for_each_possible_cpu(i) {
 		struct cpu_dbs_info_s *this_dbs_info =
 			&per_cpu(od_cpu_dbs_info, i);
