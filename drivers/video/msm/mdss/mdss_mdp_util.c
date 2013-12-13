@@ -12,7 +12,6 @@
  */
 #define pr_fmt(fmt)	"%s: " fmt, __func__
 
-#include <linux/android_pmem.h>
 #include <linux/dma-mapping.h>
 #include <linux/errno.h>
 #include <linux/file.h>
@@ -291,10 +290,16 @@ int mdss_mdp_put_img(struct mdss_mdp_img_data *data)
 	if (data->flags & MDP_MEMORY_ID_TYPE_FB) {
 		pr_debug("fb mem buf=0x%x\n", data->addr);
 		fput_light(data->srcp_file, data->p_need);
+<<<<<<< HEAD
 		data->srcp_file = NULL;
 	} else if (data->srcp_file) {
 		pr_debug("pmem buf=0x%x\n", data->addr);
 		put_pmem_file(data->srcp_file);
+=======
+		return 0;
+	}
+	if (data->srcp_file) {
+>>>>>>> 6da1878... msm: Remove all references to CONFIG_ANDROID_PMEM
 		data->srcp_file = NULL;
 	} else if (!IS_ERR_OR_NULL(data->srcp_ihdl)) {
 		pr_debug("ion hdl=%p buf=0x%x\n", data->srcp_ihdl, data->addr);
@@ -349,6 +354,7 @@ int mdss_mdp_get_img(struct msmfb_data *img, struct mdss_mdp_img_data *data)
 		}
 	} else if (iclient) {
 		data->srcp_ihdl = ion_import_dma_buf(iclient, img->memory_id);
+<<<<<<< HEAD
 		if (IS_ERR_OR_NULL(data->srcp_ihdl)) {
 			pr_err("error on ion_import_fd\n");
 			ret = PTR_ERR(data->srcp_ihdl);
@@ -375,6 +381,12 @@ int mdss_mdp_get_img(struct msmfb_data *img, struct mdss_mdp_img_data *data)
 		unsigned long vstart;
 		ret = get_pmem_file(img->memory_id, start, &vstart, len,
 				    &data->srcp_file);
+=======
+		if (IS_ERR_OR_NULL(data->srcp_ihdl))
+			return PTR_ERR(data->srcp_ihdl);
+		ret = ion_phys(iclient, data->srcp_ihdl,
+			       start, (size_t *) len);
+>>>>>>> 6da1878... msm: Remove all references to CONFIG_ANDROID_PMEM
 	}
 
 	if (!ret && (img->offset < data->len)) {

@@ -25,8 +25,6 @@
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-device.h>
 
-#include <linux/android_pmem.h>
-
 #include "msm.h"
 
 #ifdef CONFIG_MSM_CAMERA_DEBUG
@@ -70,26 +68,6 @@
 })
 
 static DEFINE_MUTEX(hlist_mut);
-
-#ifdef CONFIG_ANDROID_PMEM
-static int check_pmem_info(struct msm_pmem_info *info, int len)
-{
-	if (info->offset < len &&
-		info->offset + info->len <= len &&
-		info->planar0_off < len &&
-		info->planar1_off < len)
-		return 0;
-
-	pr_err("%s: check failed: off %d len %d y %d cbcr %d (total len %d)\n",
-						__func__,
-						info->offset,
-						info->len,
-						info->planar0_off,
-						info->planar1_off,
-						len);
-	return -EINVAL;
-}
-#endif
 
 static int check_overlap(struct hlist_head *ptype,
 				unsigned long paddr,
@@ -138,6 +116,7 @@ static int msm_pmem_table_add(struct hlist_head *ptype,
 	if (ion_map_iommu(client, region->handle, domain_num, 0,
 				  SZ_4K, 0, &paddr, &len, 0, 0) < 0)
 		goto out2;
+<<<<<<< HEAD
 		// Start LGE_BSP_CAMERA::seongjo.kim@lge.com 2012-08-17 Add log for iommu issue debug
 		pr_err("%s: IOMMU mapped address is 0x%x\n", __func__, (unsigned int)paddr);
 		// End LGE_BSP_CAMERA::seongjo.kim@lge.com 2012-08-17 Add log for iommu issue debug
@@ -149,6 +128,8 @@ static int msm_pmem_table_add(struct hlist_head *ptype,
 		goto out1;
 	}
 	region->file = file;
+=======
+>>>>>>> 6da1878... msm: Remove all references to CONFIG_ANDROID_PMEM
 #else
 	paddr = 0;
 	file = NULL;
@@ -156,9 +137,6 @@ static int msm_pmem_table_add(struct hlist_head *ptype,
 #endif
 	if (!info->len)
 		info->len = len;
-	rc = check_pmem_info(info, len);
-	if (rc < 0)
-		goto out3;
 	paddr += info->offset;
 	len = info->len;
 
@@ -188,8 +166,6 @@ out3:
 #ifdef CONFIG_MSM_MULTIMEDIA_USE_ION
 out2:
 	ion_free(client, region->handle);
-#elif CONFIG_ANDROID_PMEM
-	put_pmem_file(region->file);
 #endif
 out1:
 	kfree(region);
@@ -260,8 +236,6 @@ static int __msm_pmem_table_del(struct hlist_head *ptype,
 				pr_err("%s: IOMMU unmapping address 0x%x\n", __func__, (unsigned int)region->paddr);
 				// End LGE_BSP_CAMERA::seongjo.kim@lge.com 2012-08-17 Add log for iommu issue debug
 				ion_free(client, region->handle);
-#else
-				put_pmem_file(region->file);
 #endif
 				kfree(region);
 			}
