@@ -50,6 +50,10 @@
 #include <mach/msm_bus.h>
 #include <mach/rpm-regulator.h>
 
+#ifdef CONFIG_FORCE_FAST_CHARGE
+#include <linux/fastchg.h>
+#endif
+
 #ifdef CONFIG_LGE_PM
 #include <mach/restart.h>
 #include <linux/reboot.h>
@@ -1169,7 +1173,7 @@ static int msm_otg_notify_chg_type(struct msm_otg *motg)
 		return 0;
 
 	prev_charger_type = charger_type;	
-	
+
 	return pm8921_set_usb_power_supply_type(charger_type);
 #else
 	if (!psy) {
@@ -1253,6 +1257,11 @@ static void msm_otg_notify_charger(struct msm_otg *motg, unsigned mA)
 		dev_err(motg->phy.dev,
 			"Failed notifying %d charger type to PMIC\n",
 							motg->chg_type);
+
+#ifdef CONFIG_FORCE_FAST_CHARGE
+	if (force_fast_charge > 0)
+		mA = IDEV_ACA_CHG_MAX;
+#endif
 
 	if (motg->cur_power == mA)
 		return;
@@ -2547,9 +2556,9 @@ static void msm_otg_sm_work(struct work_struct *w)
 					default:
 						break;
 					}					
-					
+
 				}
-				
+
 			    work = 0;			    
 				break;
 			}
@@ -2676,7 +2685,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 #endif
 			msm_otg_notify_charger(motg, 0);
 			msm_otg_reset(otg->phy);
-			
+
 			/*
 			 * There is a small window where ID interrupt
 			 * is not monitored during ID detection circuit
@@ -2725,7 +2734,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 				break;
 			}
 #endif			
-			
+
 			pm_runtime_put_noidle(otg->phy->dev);
 			pm_runtime_suspend(otg->phy->dev);
 		}
@@ -3377,7 +3386,7 @@ int usb_id_sel_enable(int on)
 		    pr_info("regulator already disabled (ext_mpp8) -> DEVICE_ID\n");
 			return 0;
 		}
-		
+
 		rc = regulator_disable(_usb_id_sel);
 		if (rc) {
 			pr_err("disable ext_mpp8 failed, rc=%d\n", rc);
@@ -3481,14 +3490,14 @@ static void msm_pmic_id_w(struct work_struct *w)
 	}
 
 	pr_info("%s: INTERRUPT !\n",__func__);
-	
+
     tempret = pm8921_is_usb_chg_plugged_in();
 
     if(tempret){
 	    pr_info("%s: pmic_usbin (%d), Dismiss pmic_id_irq\n",__func__, tempret);
 		return;
     }
-	
+
 	/*
 	 * 2013-01-21, seokjeong.hong@lge.com
 	 * To prevent abnormal behaviors, Inserting unauthorized cable w/180K or 200K ohm resistor
