@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm 3.4.75 Kernel Configuration
+# Linux/arm 3.4.77 Kernel Configuration
 #
 CONFIG_ARM=y
 CONFIG_ARM_HAS_SG_CHAIN=y
@@ -3656,7 +3656,11 @@ CONFIG_CRC32_SLICEBY8=y
 # CONFIG_CRC7 is not set
 CONFIG_LIBCRC32C=y
 # CONFIG_CRC8 is not set
+<<<<<<< HEAD:arch/arm/configs/cyanogenmod_e970_defconfig
 CONFIG_AUDIT_GENERIC=y
+=======
+# CONFIG_RANDOM32_SELFTEST is not set
+>>>>>>> 1b2fcda... update configs:arch/arm/configs/mako_oc_config
 CONFIG_ZLIB_INFLATE=y
 CONFIG_ZLIB_DEFLATE=y
 CONFIG_LZO_COMPRESS=y
