@@ -469,8 +469,13 @@ CONFIG_MSM_BAM_DMUX=y
 CONFIG_MSM_N_WAY_SMD=y
 CONFIG_MSM_N_WAY_SMSM=y
 # CONFIG_MSM_RESET_MODEM is not set
+<<<<<<< HEAD:arch/arm/configs/cyanogenmod_e970_defconfig
 CONFIG_MSM_SMD_LOGGING=y
 CONFIG_MSM_IPC_LOGGING=y
+=======
+# CONFIG_MSM_SMD_LOGGING is not set
+# CONFIG_MSM_IPC_LOGGING is not set
+>>>>>>> 5ab430b... ARM: msm: disable MSM_SMD_LOGGING:arch/arm/configs/mako_oc_config
 CONFIG_MSM_SMD_NMEA=y
 CONFIG_MSM_HSIC_TTY=y
 CONFIG_MSM_SMD_TTY=y
