@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2012, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,9 +23,6 @@
 #include "smd_private.h"
 
 #define BUILD_ID_LENGTH 32
-
-extern int g_speed_bin;
-extern int g_pvs_bin;
 
 enum {
 	HW_PLATFORM_UNKNOWN = 0,
@@ -237,6 +234,7 @@ static enum msm_cpu cpu_of_id[] = {
 	[117] = MSM_CPU_8930,
 	[118] = MSM_CPU_8930,
 	[119] = MSM_CPU_8930,
+	[179] = MSM_CPU_8930,
 
 	/* 8627 IDs */
 	[120] = MSM_CPU_8627,
@@ -258,7 +256,6 @@ static enum msm_cpu cpu_of_id[] = {
 	[127] = MSM_CPU_8625,
 	[128] = MSM_CPU_8625,
 	[129] = MSM_CPU_8625,
-	[137] = MSM_CPU_8625,
 
 	/* 8064 MPQ ID */
 	[130] = MSM_CPU_8064,
@@ -283,6 +280,7 @@ static enum msm_cpu cpu_of_id[] = {
 	[143] = MSM_CPU_8930AA,
 	[144] = MSM_CPU_8930AA,
 	[160] = MSM_CPU_8930AA,
+	[180] = MSM_CPU_8930AA,
 
 	/* 8226 IDs */
 	[145] = MSM_CPU_8226,
@@ -292,6 +290,16 @@ static enum msm_cpu cpu_of_id[] = {
 
 	/* 8064AB IDs */
 	[153] = MSM_CPU_8064AB,
+
+	/* 8930AB IDs */
+	[154] = MSM_CPU_8930AB,
+	[155] = MSM_CPU_8930AB,
+	[156] = MSM_CPU_8930AB,
+	[157] = MSM_CPU_8930AB,
+	[181] = MSM_CPU_8930AB,
+
+	/* 8064AA IDs */
+	[172] = MSM_CPU_8064AA,
 
 	/* Uninitialized IDs are not known to run Linux.
 	   MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -304,35 +312,6 @@ static struct socinfo_v1 dummy_socinfo = {
 	.format = 1,
 	.version = 1,
 };
-
-#if defined (CONFIG_LGE_PM)
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GV_KR) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
-u16 *poweron_st = 0;
-uint16_t power_on_status_info_get(void)
-{
-    poweron_st = smem_alloc(SMEM_POWER_ON_STATUS_INFO, sizeof(poweron_st));
-
-    if( poweron_st == NULL ) return 0 ;
-    return *poweron_st;
-}
-EXPORT_SYMBOL(power_on_status_info_get);
-
-
-u32 *batt_info = 0;
-uint32_t battery_info_get(void)
-{
-    batt_info = smem_alloc(SMEM_BATT_INFO, sizeof(batt_info));
-
-    if (batt_info == NULL) {
-		pr_err("%s: smem_alloc returns NULL\n", __func__);
-		return 0;
-    }
-
-    return *batt_info;
-}
-EXPORT_SYMBOL(battery_info_get);
-#endif
-#endif
 
 uint32_t socinfo_get_id(void)
 {
@@ -408,16 +387,6 @@ uint32_t socinfo_get_pmic_die_revision(void)
 	return socinfo ?
 		(socinfo->v1.format >= 7 ? socinfo->v7.pmic_die_revision : 0)
 		: 0;
-}
-
-int socinfo_get_speed_bin(void)
-{
-	return g_speed_bin;
-}
-
-int socinfo_get_pvs_bin(void)
-{
-	return g_pvs_bin;
 }
 
 enum msm_cpu socinfo_get_msm_cpu(void)
@@ -628,30 +597,10 @@ socinfo_show_pmic_die_revision(struct sys_device *dev,
 		socinfo_get_pmic_die_revision());
 }
 
-static ssize_t
-socinfo_show_speed_bin(struct sys_device *dev,
-		       struct sysdev_attribute *attr,
-		       char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-		socinfo_get_speed_bin());
-}
-
-static ssize_t
-socinfo_show_pvs_bin(struct sys_device *dev,
-		     struct sysdev_attribute *attr,
-		     char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-		socinfo_get_pvs_bin());
-}
-
 static struct sysdev_attribute socinfo_v1_files[] = {
 	_SYSDEV_ATTR(id, 0444, socinfo_show_id, NULL),
 	_SYSDEV_ATTR(version, 0444, socinfo_show_version, NULL),
 	_SYSDEV_ATTR(build_id, 0444, socinfo_show_build_id, NULL),
-	_SYSDEV_ATTR(speed_bin, 0444, socinfo_show_speed_bin, NULL),
-	_SYSDEV_ATTR(pvs_bin, 0444, socinfo_show_pvs_bin, NULL),
 };
 
 static struct sysdev_attribute socinfo_v2_files[] = {
@@ -791,11 +740,6 @@ static void * __init setup_dummy_socinfo(void)
 			sizeof(dummy_socinfo.build_id));
 	} else if (machine_is_msm8625_rumi3())
 		dummy_socinfo.id = 127;
-	else if (early_machine_is_mpq8092()) {
-		dummy_socinfo.id = 146;
-		strlcpy(dummy_socinfo.build_id, "mpq8092 - ",
-		sizeof(dummy_socinfo.build_id));
-	}
 	strlcat(dummy_socinfo.build_id, "Dummy socinfo",
 		sizeof(dummy_socinfo.build_id));
 	return (void *) &dummy_socinfo;

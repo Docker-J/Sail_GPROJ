@@ -43,6 +43,7 @@ static const char *handler[]= {
 	"address exception",
 	"interrupt",
 	"undefined instruction",
+};
 
 #ifdef CONFIG_LGE_HANDLE_PANIC
 static int first_call_chain = 0;
