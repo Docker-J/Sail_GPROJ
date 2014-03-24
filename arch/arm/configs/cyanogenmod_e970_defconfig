@@ -1375,6 +1375,7 @@ CONFIG_BLK_DEV_SD=y
 # CONFIG_CHR_DEV_ST is not set
 # CONFIG_CHR_DEV_OSST is not set
 # CONFIG_BLK_DEV_SR is not set
+<<<<<<< HEAD:arch/arm/configs/cyanogenmod_e970_defconfig
 CONFIG_CHR_DEV_SG=y
 CONFIG_CHR_DEV_SCH=y
 CONFIG_SCSI_MULTI_LUN=y
@@ -1382,6 +1383,14 @@ CONFIG_SCSI_CONSTANTS=y
 CONFIG_SCSI_LOGGING=y
 CONFIG_SCSI_SCAN_ASYNC=y
 # CONFIG_SCSI_WAIT_SCAN is not set
+=======
+# CONFIG_CHR_DEV_SG is not set
+# CONFIG_CHR_DEV_SCH is not set
+# CONFIG_SCSI_MULTI_LUN is not set
+# CONFIG_SCSI_CONSTANTS is not set
+# CONFIG_SCSI_LOGGING is not set
+# CONFIG_SCSI_SCAN_ASYNC is not set
+>>>>>>> 32071a3... [SCSI] Remove scsi_wait_scan module:arch/arm/configs/mako_oc_config
 
 #
 # SCSI Transports
