@@ -483,8 +483,8 @@ flush_signal_handlers(struct task_struct *t, int force_default)
 			ka->sa.sa_handler = SIG_DFL;
 		ka->sa.sa_flags = 0;
 #ifdef __ARCH_HAS_SA_RESTORER
-		ka->sa.sa_restorer = NULL;
-#endif
+       ka->sa.sa_restorer = NULL;  
+#endif  
 		sigemptyset(&ka->sa.sa_mask);
 		ka++;
 	}
@@ -1637,7 +1637,7 @@ ret:
  */
 bool do_notify_parent(struct task_struct *tsk, int sig)
 {
-	struct siginfo info;
+	struct siginfo info = {};
 	unsigned long flags;
 	struct sighand_struct *psig;
 	bool autoreap = false;
@@ -2211,7 +2211,7 @@ relock:
 	 * Now that we woke up, it's crucial if we're supposed to be
 	 * frozen that we freeze now before running anything substantial.
 	 */
-	try_to_freeze_nowarn();
+	try_to_freeze();
 
 	spin_lock_irq(&sighand->siglock);
 	/*
@@ -2764,7 +2764,7 @@ int do_sigtimedwait(const sigset_t *which, siginfo_t *info,
 		recalc_sigpending();
 		spin_unlock_irq(&tsk->sighand->siglock);
 
-		timeout = freezable_schedule_timeout_interruptible(timeout);
+		timeout = schedule_timeout_interruptible(timeout);
 
 		spin_lock_irq(&tsk->sighand->siglock);
 		__set_task_blocked(tsk, &tsk->real_blocked);
@@ -2825,6 +2825,8 @@ SYSCALL_DEFINE4(rt_sigtimedwait, const sigset_t __user *, uthese,
 SYSCALL_DEFINE2(kill, pid_t, pid, int, sig)
 {
 	struct siginfo info;
+	if (ccs_kill_permission(pid, sig))
+		return -EPERM;
 
 	info.si_signo = sig;
 	info.si_errno = 0;
@@ -2867,7 +2869,7 @@ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
 
 static int do_tkill(pid_t tgid, pid_t pid, int sig)
 {
-	struct siginfo info = {};
+	struct siginfo info;
 
 	info.si_signo = sig;
 	info.si_errno = 0;
@@ -2893,6 +2895,8 @@ SYSCALL_DEFINE3(tgkill, pid_t, tgid, pid_t, pid, int, sig)
 	/* This is only valid for single tasks */
 	if (pid <= 0 || tgid <= 0)
 		return -EINVAL;
+	if (ccs_tgkill_permission(tgid, pid, sig))
+		return -EPERM;
 
 	return do_tkill(tgid, pid, sig);
 }
@@ -2909,6 +2913,8 @@ SYSCALL_DEFINE2(tkill, pid_t, pid, int, sig)
 	/* This is only valid for single tasks */
 	if (pid <= 0)
 		return -EINVAL;
+	if (ccs_tkill_permission(pid, sig))
+		return -EPERM;
 
 	return do_tkill(0, pid, sig);
 }
@@ -2936,6 +2942,8 @@ SYSCALL_DEFINE3(rt_sigqueueinfo, pid_t, pid, int, sig,
 		return -EPERM;
 	}
 	info.si_signo = sig;
+	if (ccs_sigqueue_permission(pid, sig))
+		return -EPERM;
 
 	/* POSIX.1b doesn't mention process groups.  */
 	return kill_proc_info(sig, &info, pid);
@@ -2956,6 +2964,8 @@ long do_rt_tgsigqueueinfo(pid_t tgid, pid_t pid, int sig, siginfo_t *info)
 		return -EPERM;
 	}
 	info->si_signo = sig;
+	if (ccs_tgsigqueue_permission(tgid, pid, sig))
+		return -EPERM;
 
 	return do_send_specific(tgid, pid, sig, info);
 }
