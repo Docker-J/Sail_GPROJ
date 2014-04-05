@@ -781,7 +781,7 @@ static void armpmu_update_counters(void)
 	}
 }
 
-static int cpu_has_active_perf(void)
+static int cpu_has_active_perf(int cpu)
 {
 	struct pmu_hw_events *hw_events;
 	int enabled;
@@ -789,7 +789,7 @@ static int cpu_has_active_perf(void)
 	if (!cpu_pmu)
 		return 0;
 
-	hw_events = cpu_pmu->get_hw_events();
+	hw_events = &per_cpu(cpu_hw_events, cpu);
 	enabled = bitmap_weight(hw_events->used_mask, cpu_pmu->num_events);
 
 	if (enabled)
@@ -809,7 +809,7 @@ static int perf_cpu_pm_notifier(struct notifier_block *self, unsigned long cmd,
 {
 	switch (cmd) {
 	case CPU_PM_ENTER:
-		if (cpu_has_active_perf()) {
+		if (cpu_has_active_perf((int)v)) {
 			armpmu_update_counters();
 			perf_pmu_disable(&cpu_pmu->pmu);
 		}
