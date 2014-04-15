@@ -32,10 +32,6 @@
 #include <mach/msm_xo.h>
 #include <mach/msm_hsusb.h>
 
-#ifdef CONFIG_FORCE_FAST_CHARGE
-#include <linux/fastchg.h>
-#endif
-
 #ifdef CONFIG_BATTERY_MAX17047
 #include <linux/max17047_battery.h>
 #endif
@@ -2385,7 +2381,7 @@ static int get_prop_batt_status(struct pm8921_chg_chip *chip)
 		if(((chg_batt_temp_state == CHG_BATT_STOP_CHARGING_STATE) && (pseudo_ui_charging == 1))
 			&& (is_usb_chg_plugged_in(chip))
 			&& max17043_get_capacity(chip) < 100){
-
+	
 			batt_state = POWER_SUPPLY_STATUS_NOT_CHARGING;
 			return batt_state;
 		}
@@ -2711,40 +2707,7 @@ static void __pm8921_charger_vbus_draw(unsigned int mA)
 			i--;
 		if (i < 0)
 			i = 0;
-
-#ifdef CONFIG_FORCE_FAST_CHARGE
-		if (force_fast_charge == 1)
-			i = 14;
-		else if (force_fast_charge == 2) {
-			switch (fast_charge_level) {
-				case FAST_CHARGE_500:
-					i = 2;
-					break;
-				case FAST_CHARGE_700:
-					i = 4;
-					break;
-				case FAST_CHARGE_900:
-					i = 8;
-					break;
-				case FAST_CHARGE_1100:
-					i = 10;
-					break;
-				case FAST_CHARGE_1300:
-					i = 12;
-					break;
-				case FAST_CHARGE_1500:
-					i = 14;
-					break;
-				default:
-					break;
-			}
-		}
 		rc = pm_chg_iusbmax_set(the_chip, i);
-		pr_info("charge curent index => %d\n", i);
-#else
-		rc = pm_chg_iusbmax_set(the_chip, i);
-#endif
-
 		if (rc) {
 			pr_err("unable to set iusb to %d rc = %d\n", i, rc);
 		}
@@ -3132,7 +3095,7 @@ int pm8921_set_usb_power_supply_type(enum power_supply_type type)
 		/* max 2-sec delay time needed until fastchg-irq */
 		schedule_delayed_work(&the_chip->adaptive_usb_current_work, 
 			  round_jiffies_relative(msecs_to_jiffies(ADAPTIVE_USB_CURRENT_CHECK_PERIOD_MS*2)));
-
+		
 	}
 #endif
 
@@ -4861,7 +4824,7 @@ static int is_charging_finished(struct pm8921_chg_chip *chip,
 			last_vbat_programmed = vbat_programmed;
 			return CHG_IN_PROGRESS;
 		}
-
+	
 
 		if (chip->is_bat_cool)
 			vbat_intended = chip->cool_bat_voltage;
@@ -5033,7 +4996,7 @@ static void eoc_worker(struct work_struct *work)
         /* rconn_mohm is in milliOhms */
         ichg_meas_ma = ichg_meas_ua / 1000;
 #endif
-
+		
         vbat_batt_terminal_uv = vbat_meas_uv
                                         + ichg_meas_ma
                                         * the_chip->rconn_mohm;
@@ -7585,7 +7548,7 @@ static void monitor_batt_temp(struct work_struct *work)
 	if(lge_get_board_revno() > HW_REV_A)
 	{
 		batt_volt = max17047_get_batt_vol();
-
+		
 		max17047_write_battery_temp(batt_temp);
 	}
 	else
