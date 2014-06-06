@@ -1,4 +1,4 @@
-/* Copyright (c) 2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  * Copyright (c) 2012, LGE Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -18,6 +18,7 @@
 #include <mach/board.h>
 #include <mach/msm_bus_board.h>
 #include <mach/gpiomux.h>
+#include <mach/socinfo.h>
 #include <media/msm_camera.h>
 #include "devices.h"
 #include "board-j1.h"
@@ -566,11 +567,24 @@ static struct platform_device msm_camera_server = {
 
 void __init apq8064_init_cam(void)
 {
-	msm_gpiomux_install(apq8064_cam_common_configs,
+	/* for SGLTE2 platform, do not configure i2c/gpiomux gsbi4 is used for
+	 * some other purpose */
+	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE2) {
+		msm_gpiomux_install(apq8064_cam_common_configs,
 			ARRAY_SIZE(apq8064_cam_common_configs));
+	}
 
+/* LGE_CHANGE_S, bring up G KK OSU , 2014.01.28, yousung.kang@lge.com */
+/*	if (machine_is_apq8064_cdp()) {
+		sensor_board_info_imx074.mount_angle = 0;
+		sensor_board_info_mt9m114.mount_angle = 0;
+	} else if (machine_is_apq8064_liquid())
+		sensor_board_info_imx074.mount_angle = 180;
+*/
+/* LGE_CHANGE_E, bring up G KK OSU , 2014.01.28, yousung.kang@lge.com */
 	platform_device_register(&msm_camera_server);
-	platform_device_register(&msm8960_device_i2c_mux_gsbi4);
+	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE2)
+		platform_device_register(&msm8960_device_i2c_mux_gsbi4);
 	platform_device_register(&msm8960_device_csiphy0);
 	platform_device_register(&msm8960_device_csiphy1);
 	platform_device_register(&msm8960_device_csid0);
