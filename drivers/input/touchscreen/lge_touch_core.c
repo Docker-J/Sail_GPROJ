@@ -41,11 +41,17 @@
 #include "./DS4/RefCode_PDTScan.h"
 struct i2c_client *ds4_i2c_client;
 static int f54_fullrawcap_mode = 0;
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GVDCM) || defined(CONFIG_MACH_APQ8064_J1D) || defined(CONFIG_MACH_APQ8064_J1KD) || defined(CONFIG_MACH_APQ8064_GV_KR) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GVDCM) || defined(CONFIG_MACH_APQ8064_J1D) || defined(CONFIG_MACH_APQ8064_J1KD) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 // do nothing
 #else
 #define G_ONLY
 #endif
+
+#if defined(CONFIG_MACH_APQ8064_GKATT)
+#define ISIS_L2
+#endif
+
 #endif
 
 struct lge_touch_data
@@ -76,7 +82,10 @@ struct lge_touch_data
 #ifdef PRESSURE_DIFF
 	struct pressure_diff_info	pressure_diff;
 #endif
-        atomic_t keypad_enable;
+#ifdef MULTI_GHOST_DETECT
+	struct touch_data			multi_ghost;
+	struct delayed_work			work_multi_ghost;
+#endif
 };
 
 struct touch_device_driver*	touch_device_func;
@@ -126,13 +135,26 @@ int long_press_check = 0;
 int finger_subtraction_check_count = 0;
 bool ghost_detection = 0;
 int ghost_detection_count = 0;
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 /* keygaurd state rebase */
 int multi_touch_detection = 0;
 bool first_int_check = false;
 #endif
 #ifdef PRESSURE_DIFF
 #define ABS_DIFF_Z(x) (((x) < 0) ? -(x) : (x))
+#endif
+#ifdef MULTI_GHOST_DETECT
+bool multi_ghost_run = false;
+bool multi_ghost_run_first = false;
+bool multi_ghost_rebase = false;
+int multi_ghost_cnt[MAX_FINGER];
+#endif
+#ifdef LCD_ON_GHOST
+static u8 lcd_on_flag = 0;
+#endif
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+int z_30_num = 0; /*Use multi ghost and home key ghost algorithm*/
+bool home_key = false; /*home key ghost algorithm*/
 #endif
 #endif
 
@@ -160,12 +182,81 @@ int ts_charger_plug = 0;
 int ts_charger_type = 0;
 static void safety_reset(struct lge_touch_data *ts);
 static int touch_ic_init(struct lge_touch_data *ts);
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
 int cur_hopping_idx = 3;
 extern int cns_en;
-#endif
 static struct hrtimer hr_touch_trigger_timer;
 #define MS_TO_NS(x)	(x * 1E6L)
+#ifdef MULTI_GHOST_DETECT
+void multi_ghost_detection(struct work_struct *work_multi_ghost)
+{
+	int id = 0;
+	TOUCH_INFO_MSG("\n");
+
+	//TOUCH_INFO_MSG("[MultiGhostStart] %s %s 30 event is occured %d.\n", multi_ghost_run_first?"":"First Enter.", multi_ghost_run?"Running.":"", z_30_num);
+	if(multi_ghost_run_first){
+		for(id = 0; id < touch_test_dev->pdata->caps->max_id; id++){
+			if(!((touch_test_dev->multi_ghost.prev_data[id].status == 0) && (touch_test_dev->multi_ghost.curr_data[id].status == 0)))
+				TOUCH_INFO_MSG("[MultiGhost][%d] X %d-%d, Y %d-%d, Z %d, Sta %d-%d\n",
+						id, touch_test_dev->multi_ghost.prev_data[id].x_position,touch_test_dev->multi_ghost.curr_data[id].x_position,
+						touch_test_dev->multi_ghost.prev_data[id].y_position, touch_test_dev->multi_ghost.curr_data[id].y_position,
+						touch_test_dev->multi_ghost.curr_data[id].pressure,
+						touch_test_dev->multi_ghost.prev_data[id].status, touch_test_dev->multi_ghost.curr_data[id].status);
+			if(touch_test_dev->multi_ghost.curr_data[id].pressure == 30){
+				if(ABS_DIFF_Z(touch_test_dev->multi_ghost.curr_data[id].x_position - touch_test_dev->multi_ghost.prev_data[id].x_position) < 10 &&
+					ABS_DIFF_Z(touch_test_dev->multi_ghost.curr_data[id].y_position - touch_test_dev->multi_ghost.prev_data[id].y_position) < 10 &&
+					touch_test_dev->multi_ghost.curr_data[id].status == FINGER_PRESSED){
+					multi_ghost_cnt[id]++;
+					TOUCH_INFO_MSG("[MultiGhost][%d] Same Position Count %d\n", id, multi_ghost_cnt[id]);
+				}else if(ABS_DIFF_Z(touch_test_dev->multi_ghost.curr_data[id].x_position - touch_test_dev->multi_ghost.prev_data[id].x_position) >= 10 ||
+						ABS_DIFF_Z(touch_test_dev->multi_ghost.curr_data[id].y_position -touch_test_dev->multi_ghost.prev_data[id].y_position) >= 10){
+					if(touch_test_dev->multi_ghost.curr_data[id].status == touch_test_dev->multi_ghost.prev_data[id].status){
+						multi_ghost_cnt[id] = 0;
+						touch_test_dev->multi_ghost.prev_data[id].x_position = touch_test_dev->multi_ghost.curr_data[id].x_position;
+						touch_test_dev->multi_ghost.prev_data[id].y_position = touch_test_dev->multi_ghost.curr_data[id].y_position;
+						//TOUCH_INFO_MSG("[MultiGhost][%d] Change position. Initialize Values.\n", id);
+					}else if(touch_test_dev->multi_ghost.prev_data[id].status == FINGER_RELEASED && touch_test_dev->multi_ghost.curr_data[id].status == FINGER_PRESSED){
+						touch_test_dev->multi_ghost.prev_data[id].x_position = touch_test_dev->multi_ghost.curr_data[id].x_position;
+						touch_test_dev->multi_ghost.prev_data[id].y_position = touch_test_dev->multi_ghost.curr_data[id].y_position;
+						touch_test_dev->multi_ghost.prev_data[id].status= touch_test_dev->multi_ghost.curr_data[id].status;
+						//TOUCH_INFO_MSG("[MultiGhost][%d] Add 30. Set Values.\n", id);
+					}
+				}
+
+				if(multi_ghost_cnt[id] >= 3){
+					multi_ghost_rebase = true;
+					//TOUCH_INFO_MSG("[MultiGhost][%d] Rebase Flag is true. Run Rebase.\n",id);
+					break;
+				}
+
+			}else{
+				if(!((touch_test_dev->multi_ghost.curr_data[id].x_position == 0) && (touch_test_dev->multi_ghost.curr_data[id].y_position == 0)))
+					//TOUCH_INFO_MSG("[MultiGhost][%d] Not 30. Initialize Values.\n", id);
+				multi_ghost_cnt[id] = 0;
+				memset(&touch_test_dev->multi_ghost.curr_data[id], 0x0, sizeof(touch_test_dev->multi_ghost.curr_data[id]));
+				memset(&touch_test_dev->multi_ghost.prev_data[id], 0x0, sizeof(touch_test_dev->multi_ghost.prev_data[id]));
+
+			}
+		}
+		if(multi_ghost_rebase){
+				atomic_inc(&touch_test_dev->next_work);
+				queue_work(touch_wq, &touch_test_dev->work);
+			}else{
+				queue_delayed_work(touch_wq, &touch_test_dev->work_multi_ghost, msecs_to_jiffies(500));
+			}
+	}else{
+		multi_ghost_run_first = true;
+		for(id=0; id < touch_test_dev->pdata->caps->max_id; id++){
+			touch_test_dev->multi_ghost.prev_data[id].x_position = touch_test_dev->multi_ghost.curr_data[id].x_position;
+			touch_test_dev->multi_ghost.prev_data[id].y_position = touch_test_dev->multi_ghost.curr_data[id].y_position;
+			touch_test_dev->multi_ghost.prev_data[id].status= touch_test_dev->multi_ghost.curr_data[id].status;
+			if(!((touch_test_dev->multi_ghost.prev_data[id].x_position == 0) && (touch_test_dev->multi_ghost.prev_data[id].y_position == 0)))
+				TOUCH_INFO_MSG("[MultiGhost][%d] Set Values. X %d, Y %d Z %d\n",
+							id, touch_test_dev->multi_ghost.curr_data[id].x_position, touch_test_dev->multi_ghost.curr_data[id].y_position, touch_test_dev->multi_ghost.curr_data[id].pressure);
+		}
+		queue_delayed_work(touch_wq, &touch_test_dev->work_multi_ghost, msecs_to_jiffies(500));
+	}
+}
+#endif
 
 static enum hrtimer_restart touch_trigger_timer_handler(struct hrtimer *timer)
 {
@@ -183,9 +274,10 @@ static enum hrtimer_restart touch_trigger_timer_handler(struct hrtimer *timer)
 void trigger_baseline_state_machine(int plug_in, int type)
 {
 	u8 buf=0;
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
+#ifdef G_ONLY
 	extern u8 hopping;
 #endif
+
 
 	if (touch_test_dev && touch_test_dev->pdata->role->ghost_detection_enable) {
 
@@ -196,12 +288,13 @@ void trigger_baseline_state_machine(int plug_in, int type)
 					touch_i2c_read(touch_test_dev->client, 0x50, 1, &buf);
 					buf = buf & 0xDF;
 					touch_i2c_write_byte(touch_test_dev->client, 0x50, buf);
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
+
 					cns_en = 0;
 					if(cur_hopping_idx != 3) cur_hopping_idx = 3;
 					safety_reset(touch_test_dev);
 					queue_delayed_work(touch_wq, &touch_test_dev->work_init,
 								msecs_to_jiffies(touch_test_dev->pdata->role->booting_delay));
+#ifdef G_ONLY
 					TOUCH_INFO_MSG("cur_hopping_idx [ %s ] = %x\n", __func__, cur_hopping_idx);
 #endif
 				} else if(plug_in ==1){
@@ -209,7 +302,7 @@ void trigger_baseline_state_machine(int plug_in, int type)
 					buf = buf | 0x20;
 					touch_i2c_write_byte(touch_test_dev->client, 0x50, buf);
 
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
+#ifdef G_ONLY
 					touch_i2c_write_byte(touch_test_dev->client, 0xFF, 0x01);
 					touch_i2c_read(touch_test_dev->client, 0x0D, 1, &buf);
 
@@ -234,6 +327,7 @@ void trigger_baseline_state_machine(int plug_in, int type)
 #endif
 				}
 			}
+
 			ts_charger_type = type;
 			TOUCH_INFO_MSG(" trigger_baseline_state_machine = %d type = %d \n", plug_in, type);
 			ts_charger_plug = plug_in;
@@ -246,6 +340,22 @@ void trigger_baseline_state_machine(int plug_in, int type)
 		}
 	}
 }
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+/*home key ghost algorithm*/
+void home_key_detection(int keycode)
+{
+#ifdef HOME_KEY_DETECTION
+	if(!((z_30_num == 0) && (touch_test_dev->ts_data.total_num == 0)))
+		TOUCH_INFO_MSG("Finger num is %d. 30 num is %d.\n",z_30_num, touch_test_dev->ts_data.total_num);
+	if(z_30_num > 0 && z_30_num == touch_test_dev->ts_data.total_num){
+		home_key = true;
+		atomic_inc(&touch_test_dev->next_work);
+		queue_work(touch_wq, &touch_test_dev->work);
+	}
+#else /*do nothing*/
+#endif
+}
+#endif
 
 #ifdef PRESSURE_DIFF
 /* pressure_diff_detection  */
@@ -332,7 +442,7 @@ int pressure_diff_detection(struct lge_touch_data *ts)
 int ghost_detect_solution(struct lge_touch_data *ts)
 {
 	extern u8 pressure_zero;
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
+#ifdef G_ONLY
 	extern u8 hopping;
 #endif
 	int first_int_detection = 0;
@@ -343,7 +453,7 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 		goto out_need_to_rebase;
 	}
 
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 	/* keygaurd state rebase */
 	if((ts->gf_ctrl.stage == 0x0b) && (ts->ts_data.total_num > 1)){
 		for(id=0; id < ts->pdata->caps->max_id; id++){
@@ -366,8 +476,21 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 	}
 #endif
 
+#ifdef MULTI_GHOST_DETECT
+	if(multi_ghost_rebase){
+		TOUCH_INFO_MSG("multi ghost state init\n");
+		goto out_need_to_init;
+	}
+#endif
 	if(trigger_baseline==2) 
 		goto out_need_to_rebase;
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+	/*home key ghost algorithm*/
+	if(home_key){
+		TOUCH_INFO_MSG("home key detection state init\n");
+		goto out_need_to_init;
+	}
+#endif
 	
 	if(resume_flag) {
 		resume_flag = 0;
@@ -397,7 +520,7 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 		TOUCH_INFO_MSG("pressure\n");
 		ghost_detection = true;
 	}
-#ifdef CUST_G_TOUCH_FREQ_HOPPING
+#ifdef G_ONLY
 	if(hopping == 1) {
 		TOUCH_INFO_MSG("hopping\n");
 		ghost_detection = true;
@@ -422,6 +545,30 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 		}
 	}
 #endif
+#ifdef MULTI_GHOST_DETECT
+	if (multi_ghost_run) {
+		if (z_30_num == 0) {
+			TOUCH_INFO_MSG("[MultiGhost] 30 is Released.  WorkQ is Running so cancel WorkQ.\n");
+			cancel_delayed_work_sync(&ts->work_multi_ghost);
+			multi_ghost_run = false;
+			multi_ghost_run_first = false;
+			multi_ghost_rebase = false;
+			memset(&multi_ghost_cnt, 0x0, sizeof(multi_ghost_cnt));
+			memset(&ts->multi_ghost, 0x0, sizeof(ts->multi_ghost));
+		} else {
+			memcpy(&ts->multi_ghost.curr_data, &ts->ts_data.curr_data, sizeof(ts->multi_ghost.curr_data));
+		}
+	} else {
+		if (z_30_num >= 2) {
+			memcpy(&ts->multi_ghost.curr_data, &ts->ts_data.curr_data, sizeof(ts->multi_ghost.curr_data));
+			TOUCH_INFO_MSG("[MultiGhost] Multi Ghost Algorithm Start.\n");
+			queue_delayed_work(touch_wq, &ts->work_multi_ghost, 0);
+			multi_ghost_run = true;
+		} else {
+			;
+		}
+	}
+#endif
 	if ((ts->ts_data.state != TOUCH_ABS_LOCK) &&(ts->ts_data.total_num)){
 
 		if (ts->ts_data.prev_total_num != ts->ts_data.total_num)
@@ -443,6 +590,15 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 					ts->pressure_diff.z30_x_pos_1st = ts->ts_data.curr_data[id].x_position;
 					ts->pressure_diff.z30_y_pos_1st = ts->ts_data.curr_data[id].y_position;
 				}
+#endif
+#ifdef LCD_ON_GHOST
+				if(lcd_on_flag) {
+					if (ts->ts_data.curr_data[id].pressure == 30) {
+						TOUCH_INFO_MSG("lcd on ghost state rebase\n");
+						goto out_need_to_rebase;
+					}
+				}
+				lcd_on_flag = 0;
 #endif
 				if ( id < 10) 
 				{
@@ -549,7 +705,7 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 	}else if (!ts->ts_data.total_num){
 			long_press_check_count = 0;
 			finger_subtraction_check_count = 0;
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 			/* keygaurd state rebase */
 			multi_touch_detection = 0;
 			first_int_check = false;
@@ -559,10 +715,18 @@ int ghost_detect_solution(struct lge_touch_data *ts)
 			ts->pressure_diff.z30_id = -1;
 			ts->pressure_diff.z_more30_id= -1;
 #endif
-
+#ifdef MULTI_GHOST_DETECT
+			if(multi_ghost_run)
+				TOUCH_INFO_MSG("[MultiGhost] Release All Fingers. Initialize Values.\n");
+			multi_ghost_run = false;
+			multi_ghost_run_first = false;
+			multi_ghost_rebase = false;
+			memset(&multi_ghost_cnt, 0x0, sizeof(multi_ghost_cnt));
+			memset(&ts->multi_ghost, 0x0, sizeof(ts->multi_ghost));
+#endif
 	}
 
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 	if (ts->ts_data.state != TOUCH_BUTTON_LOCK && ts->ts_data.state != DO_NOT_ANYTHING) {
 #else
 	if (ts->ts_data.state != TOUCH_BUTTON_LOCK) {
@@ -638,6 +802,20 @@ out_need_to_rebase:
 			memset(&ts->pressure_diff, 0, sizeof(ts->pressure_diff));
 			ts->pressure_diff.z30_id = -1;
 			ts->pressure_diff.z_more30_id= -1;
+#endif
+#ifdef MULTI_GHOST_DETECT
+			cancel_delayed_work_sync(&ts->work_multi_ghost);
+			multi_ghost_run = false;
+			multi_ghost_run_first = false;
+			multi_ghost_rebase = false;
+			memset(&multi_ghost_cnt, 0x0, sizeof(multi_ghost_cnt));
+			memset(&ts->multi_ghost, 0x0, sizeof(ts->multi_ghost));
+#endif
+#ifdef LCD_ON_GHOST
+			lcd_on_flag = 0;
+#endif
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+			home_key=false; /*home key ghost algorithm*/
 #endif
 			if(ts_rebase_count==1) {
 					do_gettimeofday(&t_ex_debug[TIME_EX_FIRST_GHOST_DETECT_TIME]);
@@ -1098,11 +1276,12 @@ static void safety_reset(struct lge_touch_data *ts)
 {
 #ifdef CUST_G_TOUCH
         if(ts->fw_info.fw_upgrade.is_downloading) {
-	    if (likely(touch_debug_mask & DEBUG_BASE_INFO))
-		TOUCH_INFO_MSG("%s: under f/w updating.. [%d]", __FUNCTION__, ts->fw_info.fw_upgrade.is_downloading);
+		if (likely(touch_debug_mask & DEBUG_BASE_INFO))
+               		TOUCH_INFO_MSG("%s: under f/w updating.. [%d]", __FUNCTION__, ts->fw_info.fw_upgrade.is_downloading);
 		return;
-        }
+	}
 #endif
+
 	if (ts->pdata->role->operation_mode)
 		disable_irq(ts->client->irq);
 	else
@@ -1112,6 +1291,9 @@ static void safety_reset(struct lge_touch_data *ts)
 	if (ts->pdata->role->ghost_detection_enable) {
 		hrtimer_cancel(&hr_touch_trigger_timer);
 	}
+#endif
+#ifdef MULTI_GHOST_DETECT
+		cancel_delayed_work_sync(&ts->work_multi_ghost);
 #endif
 
 	release_all_ts_event(ts);
@@ -1184,7 +1366,9 @@ static int touch_ic_init(struct lge_touch_data *ts)
 		do_gettimeofday(&t_ex_debug[TIME_EX_INIT_TIME]);
 	}
 #endif
-
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+	home_key = false; /*home key ghost algorithm*/
+#endif
 	ts->gf_ctrl.count = 0;
 	ts->gf_ctrl.ghost_check_count = 0;
 	ts->gf_ctrl.saved_x = -1;
@@ -1222,10 +1406,10 @@ static int touch_ic_init(struct lge_touch_data *ts)
 	}
 
 	if (unlikely(touch_debug_mask & (DEBUG_BASE_INFO | DEBUG_GHOST))){
-		TOUCH_INFO_MSG("%s %s(%s): FW ver[%s], force[%d]\n",
+		TOUCH_INFO_MSG("%s %s(%s): FW ver[%s], force[u:%d,r:%d]\n",
 		        ts->pdata->maker, ts->fw_info.ic_fw_identifier,
 		        ts->pdata->role->operation_mode?"Interrupt mode":"Polling mode",
-		        ts->fw_info.ic_fw_version, ts->fw_info.fw_upgrade.fw_force_upgrade);
+		        ts->fw_info.ic_fw_version, ts->fw_info.fw_upgrade.fw_force_upgrade, ts->fw_info.fw_force_rework);
 		TOUCH_INFO_MSG("irq_pin[%d] next_work[%d] ghost_stage[0x%x]\n",
 				ts->int_pin_state, next_work, ts->gf_ctrl.stage);
 	}
@@ -1245,6 +1429,13 @@ static int touch_ic_init(struct lge_touch_data *ts)
 	memset(&ts->pressure_diff, 0, sizeof(ts->pressure_diff));
 	ts->pressure_diff.z30_id = -1;
 	ts->pressure_diff.z_more30_id= -1;
+#endif
+#ifdef MULTI_GHOST_DETECT
+	multi_ghost_run = false;
+	multi_ghost_run_first = false;
+	multi_ghost_rebase = false;
+	memset(&multi_ghost_cnt, 0x0, sizeof(multi_ghost_cnt));
+	memset(&ts->multi_ghost, 0x0, sizeof(ts->multi_ghost));
 #endif
 	return 0;
 
@@ -1718,14 +1909,20 @@ static void check_log_finger_changed(struct lge_touch_data *ts, u8 total_num)
 					break;
 				}
 			}
+#ifdef ISIS_L2
+			TOUCH_INFO_MSG("%d finger pressed : <%d> x[****] y[****] z[%3d]\n",
+					total_num, id,
+					ts->ts_data.curr_data[id].pressure);
+#else
 			TOUCH_INFO_MSG("%d finger pressed : <%d> x[%4d] y[%4d] z[%3d]\n",
 					total_num, id,
 					ts->ts_data.curr_data[id].x_position,
 					ts->ts_data.curr_data[id].y_position,
 					ts->ts_data.curr_data[id].pressure);
+#endif
 		} else {
 		/* Finger subtracted */
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 			first_int_check = false; /* keygaurd state rebase */
 #endif
 #ifdef PRESSURE_DIFF
@@ -1759,11 +1956,17 @@ static void check_log_finger_changed(struct lge_touch_data *ts, u8 total_num)
 		if (tmp_p != tmp_r
 				&& (ts->ts_data.curr_data[tmp_p].status
 						!= ts->ts_data.prev_data[tmp_p].status)) {
+#ifdef ISIS_L2
+			TOUCH_INFO_MSG("%d finger changed : <%d -> %d> x[****] y[****] z[%3d]\n",
+						total_num, tmp_r, tmp_p,
+						ts->ts_data.curr_data[id].pressure);
+#else
 			TOUCH_INFO_MSG("%d finger changed : <%d -> %d> x[%4d] y[%4d] z[%3d]\n",
 						total_num, tmp_r, tmp_p,
 						ts->ts_data.curr_data[id].x_position,
 						ts->ts_data.curr_data[id].y_position,
 						ts->ts_data.curr_data[id].pressure);
+#endif
 		}
 	}
 }
@@ -1782,10 +1985,15 @@ static void check_log_finger_released(struct lge_touch_data *ts)
 		}
 	}
 
+#ifdef ISIS_L2
+	TOUCH_INFO_MSG("touch_release[%s] : <%d> x[****] y[****]\n",
+			ts->ts_data.palm?"Palm":"", id);
+#else
 	TOUCH_INFO_MSG("touch_release[%s] : <%d> x[%4d] y[%4d]\n",
 			ts->ts_data.palm?"Palm":"", id,
 			ts->ts_data.prev_data[id].x_position,
 			ts->ts_data.prev_data[id].y_position);
+#endif
 }
 
 /* touch_work_pre_proc
@@ -1919,7 +2127,7 @@ static void touch_work_func_a(struct work_struct *work)
 			container_of(work, struct lge_touch_data, work);
 	u8 report_enable = 0;
 	int ret = 0;
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 	u8 id;
 #endif
 
@@ -1934,6 +2142,22 @@ static void touch_work_func_a(struct work_struct *work)
 	}
 #endif
 
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
+	if (ts->pdata->role->ghost_detection_enable) {
+			if(home_key		/*home key ghost algorithm*/
+#ifdef MULTI_GHOST_DETECT
+					|| (multi_ghost_rebase)		/*multi ghost algorithm*/
+#endif
+			){
+			ret = ghost_detect_solution(ts);
+			if(ret == NEED_TO_OUT)
+				goto out;
+			else if(ret == NEED_TO_INIT){
+				goto err_out_init;
+			}
+		}
+	}
+#endif
 	ret = touch_work_pre_proc(ts);
 
 	if (ret == -EIO)
@@ -1980,7 +2204,7 @@ static void touch_work_func_a(struct work_struct *work)
 			if (ts->gf_ctrl.stage == GHOST_STAGE_CLEAR || (ts->gf_ctrl.stage | GHOST_STAGE_1) || ts->gf_ctrl.stage == GHOST_STAGE_4)
 				ts->ts_data.state = TOUCH_BUTTON_LOCK;
 
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL)
+#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT) || defined(CONFIG_MACH_APQ8064_GKGLOBAL) || defined(CONFIG_MACH_APQ8064_OMEGAR_KR) || defined(CONFIG_MACH_APQ8064_OMEGA_KR) || defined(CONFIG_MACH_APQ8064_GV_KR)
 			for (id = 0; id < ts->pdata->caps->max_id; id++) {
 				if (ts->ts_data.curr_data[id].y_position > 3780) {
 					ts->ts_data.state = DO_NOT_ANYTHING;
@@ -2020,7 +2244,6 @@ static void touch_work_func_a(struct work_struct *work)
 	}
 
 	/* Button handle */
-	if (atomic_read(&ts->keypad_enable))
 	if (ts->ts_data.state != TOUCH_BUTTON_LOCK) {
 		/* do not check when there is no pressed button at error case
 		 * 	- if you check it, sometimes touch is locked becuase button pressed via IC error.
@@ -2110,18 +2333,12 @@ static bool is_in_section(struct rect rt, u16 x, u16 y)
 	return x >= rt.left && x <= rt.right && y >= rt.top && y <= rt.bottom;
 }
 
-static u16 find_button(struct lge_touch_data *ts)
+static u16 find_button(const struct t_data data, const struct section_info sc)
 {
 	int i;
 
-        const struct t_data data = ts->ts_data.curr_data[0];
-        const struct section_info sc = ts->st_info;
-
 	if (is_in_section(sc.panel, data.x_position, data.y_position))
 		return KEY_PANEL;
-
-        if (!atomic_read(&ts->keypad_enable))
-	        return KEY_BOUNDARY;
 
 	for(i=0; i<sc.b_num; i++){
 		if (is_in_section(sc.button[i], data.x_position, data.y_position))
@@ -2197,7 +2414,7 @@ static void touch_work_func_b(struct work_struct *work)
 			}
 		}
 
-		tmp_button = find_button(ts);
+		tmp_button = find_button(ts->ts_data.curr_data[id], ts->st_info);
 		if (unlikely(touch_debug_mask & DEBUG_BUTTON))
 			TOUCH_INFO_MSG("button_now [%d]\n", tmp_button);
 
@@ -2402,9 +2619,9 @@ static void touch_fw_upgrade_func(struct work_struct *work_fw_upgrade)
 	}
 
 	if (likely(touch_debug_mask & (DEBUG_FW_UPGRADE | DEBUG_BASE_INFO)))
-		TOUCH_INFO_MSG("IC identifier[%s] fw_version[%s:%s] : force[%d]\n",
+		TOUCH_INFO_MSG("IC identifier[%s] fw_version[%s:%s] : force[u:%d,r:%d]\n",
 				ts->fw_info.ic_fw_identifier, ts->fw_info.ic_fw_version,
-				ts->fw_info.syna_img_fw_version, ts->fw_info.fw_upgrade.fw_force_upgrade);
+				ts->fw_info.syna_img_fw_version, ts->fw_info.fw_upgrade.fw_force_upgrade, ts->fw_info.fw_force_rework);
 
 	ts->fw_info.fw_upgrade.is_downloading = UNDER_DOWNLOADING;
 
@@ -2417,11 +2634,7 @@ static void touch_fw_upgrade_func(struct work_struct *work_fw_upgrade)
 			TOUCH_INFO_MSG("FW-upgrade Force Rework.\n");
 		} else {
 			TOUCH_INFO_MSG("ic %s img %s\n",ts->fw_info.ic_fw_version,ts->fw_info.syna_img_fw_version);
-#if defined(CONFIG_MACH_APQ8064_GK_KR) || defined(CONFIG_MACH_APQ8064_GKATT)|| defined(CONFIG_MACH_APQ8064_GKGLOBAL)
 			if( ((int)simple_strtoul(&ts->fw_info.ic_fw_version[1], NULL, 10) ==
-#else
-			if( ((int)simple_strtoul(&ts->fw_info.ic_fw_version[1], NULL, 10) >= 
-#endif
 				 (int)simple_strtoul(&ts->fw_info.syna_img_fw_version[1], NULL, 10))
 				 && !ts->fw_info.fw_upgrade.fw_force_upgrade) {		   		
 				TOUCH_INFO_MSG("FW-upgrade is not executed\n");
@@ -2451,8 +2664,12 @@ static void touch_fw_upgrade_func(struct work_struct *work_fw_upgrade)
 		hrtimer_cancel(&hr_touch_trigger_timer);
 	}
 #endif
+#ifdef MULTI_GHOST_DETECT
+		cancel_delayed_work_sync(&ts->work_multi_ghost);
+#endif
 
 	if (ts->curr_pwr_state == POWER_OFF) {
+		release_all_ts_event(ts);
 		touch_power_cntl(ts, POWER_ON);
 		msleep(ts->pdata->role->booting_delay);
 	}
@@ -2527,7 +2744,7 @@ out:
 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y, 0, ts->pdata->caps->y_max, 0, 0);
 #endif
 	memset(&ts->fw_info.fw_upgrade, 0, sizeof(ts->fw_info.fw_upgrade));
-	ts->fw_info.fw_force_rework = false;
+
 	return;
 }
 
@@ -2903,6 +3120,9 @@ static ssize_t store_ts_reset(struct lge_touch_data *ts, const char *buf, size_t
 		hrtimer_cancel(&hr_touch_trigger_timer);
 	}
 #endif
+#ifdef MULTI_GHOST_DETECT
+		cancel_delayed_work_sync(&ts->work_multi_ghost);
+#endif
 
 	cancel_work_sync(&ts->work);
 	cancel_delayed_work_sync(&ts->work_init);
@@ -3064,6 +3284,25 @@ static ssize_t ic_register_ctrl(struct lge_touch_data *ts, const char *buf, size
  * If you need more information, see the 'ghost_finger_solution' function.
  */
 static ssize_t store_keyguard_info(struct lge_touch_data *ts, const char *buf, size_t count)
+{
+	int value;
+	sscanf(buf, "%d", &value);
+
+	if(value == KEYGUARD_ENABLE)
+		ts->gf_ctrl.stage = GHOST_STAGE_1 | GHOST_STAGE_2 | GHOST_STAGE_4;
+	else if(value == KEYGUARD_RESERVED)
+		ts->gf_ctrl.stage &= ~GHOST_STAGE_2;
+
+	if (touch_debug_mask & DEBUG_GHOST || touch_debug_mask & DEBUG_BASE_INFO){
+		TOUCH_INFO_MSG("ghost_stage [0x%x]\n", ts->gf_ctrl.stage);
+		if(value == KEYGUARD_RESERVED)
+			TOUCH_INFO_MSG("ghost_stage2 : cleared[0x%x]\n", ts->gf_ctrl.stage);
+	}
+
+	return count;
+}
+
+static ssize_t store_ime_status_info(struct lge_touch_data *ts, const char *buf, size_t count)
 {
 	int value;
 	sscanf(buf, "%d", &value);
@@ -3456,34 +3695,6 @@ static ssize_t show_ts_noise(struct lge_touch_data *ts, char *buf)
 	return ret;
 }
 #endif
-
-static ssize_t keypad_enable_read(struct lge_touch_data *ts, char *buf)
-{
-	return sprintf(buf, "%d\n", atomic_read(&ts->keypad_enable));
-}
-
-static int keypad_enable_store(struct lge_touch_data *ts, const char *buf, size_t count)
-{
-	unsigned int val = 0;
-
-	sscanf(buf, "%d", &val);
-	val = (val == 0 ? 0:1);
-	atomic_set(&ts->keypad_enable, val);
-	if (val) {
-		set_bit(KEY_BACK, ts->input_dev->keybit);
-		set_bit(KEY_MENU, ts->input_dev->keybit);
-		set_bit(KEY_HOME, ts->input_dev->keybit);
-		set_bit(KEY_SEARCH, ts->input_dev->keybit);
-	} else {
-		clear_bit(KEY_BACK, ts->input_dev->keybit);
-		clear_bit(KEY_MENU, ts->input_dev->keybit);
-		clear_bit(KEY_HOME, ts->input_dev->keybit);
-		clear_bit(KEY_SEARCH, ts->input_dev->keybit);
-	}
-	input_sync(ts->input_dev);
-	return count;
-}
-
 static LGE_TOUCH_ATTR(platform_data, S_IRUGO | S_IWUSR, show_platform_data, NULL);
 static LGE_TOUCH_ATTR(firmware, S_IRUGO | S_IWUSR, show_fw_info, store_fw_upgrade);
 static LGE_TOUCH_ATTR(fw_ver, S_IRUGO | S_IWUSR, show_fw_ver, NULL);
@@ -3491,6 +3702,7 @@ static LGE_TOUCH_ATTR(section, S_IRUGO | S_IWUSR, show_section_info, NULL);
 static LGE_TOUCH_ATTR(reset, S_IRUGO | S_IWUSR, NULL, store_ts_reset);
 static LGE_TOUCH_ATTR(ic_rw, S_IRUGO | S_IWUSR, NULL, ic_register_ctrl);
 static LGE_TOUCH_ATTR(keyguard, S_IRUGO | S_IWUSR, NULL, store_keyguard_info);
+static LGE_TOUCH_ATTR(ime_status, S_IRUGO | S_IWUSR, NULL, store_ime_status_info);
 static LGE_TOUCH_ATTR(virtualkeys, S_IRUGO | S_IWUSR, show_virtual_key, NULL);
 static LGE_TOUCH_ATTR(jitter, S_IRUGO | S_IWUSR, NULL, store_jitter_solution);
 static LGE_TOUCH_ATTR(accuracy, S_IRUGO | S_IWUSR, NULL, store_accuracy_solution);
@@ -3506,7 +3718,6 @@ static LGE_TOUCH_ATTR(ghost_detection_enable, S_IRUGO | S_IWUSR, NULL, store_gho
 static LGE_TOUCH_ATTR(pen_enable, S_IRUGO | S_IWUSR, show_pen_enable, NULL);
 static LGE_TOUCH_ATTR(ts_noise, S_IRUGO | S_IWUSR, show_ts_noise, NULL);
 #endif
-static LGE_TOUCH_ATTR(keypad_enable, S_IRUGO | S_IWUSR, keypad_enable_read, keypad_enable_store);
 
 static struct attribute *lge_touch_attribute_list[] = {
 	&lge_touch_attr_platform_data.attr,
@@ -3516,6 +3727,7 @@ static struct attribute *lge_touch_attribute_list[] = {
 	&lge_touch_attr_reset.attr,
 	&lge_touch_attr_ic_rw.attr,
 	&lge_touch_attr_keyguard.attr,
+	&lge_touch_attr_ime_status.attr,
 	&lge_touch_attr_virtualkeys.attr,
 	&lge_touch_attr_jitter.attr,
 	&lge_touch_attr_accuracy.attr,
@@ -3531,7 +3743,6 @@ static struct attribute *lge_touch_attribute_list[] = {
 	&lge_touch_attr_pen_enable.attr,
 	&lge_touch_attr_ts_noise.attr,
 #endif
-	&lge_touch_attr_keypad_enable.attr,
 	NULL,
 };
 
@@ -3682,7 +3893,9 @@ static int touch_probe(struct i2c_client *client, const struct i2c_device_id *id
 
 	INIT_DELAYED_WORK(&ts->work_init, touch_init_func);
 	INIT_WORK(&ts->work_fw_upgrade, touch_fw_upgrade_func);
-
+#ifdef MULTI_GHOST_DETECT
+	INIT_DELAYED_WORK(&ts->work_multi_ghost, multi_ghost_detection);
+#endif
 	/* input dev setting */
 	ts->input_dev = input_allocate_device();
 	if (ts->input_dev == NULL) {
@@ -3817,8 +4030,6 @@ static int touch_probe(struct i2c_client *client, const struct i2c_device_id *id
 	register_early_suspend(&ts->early_suspend);
 #endif
 
-        atomic_set(&ts->keypad_enable, 1);
-
 	/* Register sysfs for making fixed communication path to framework layer */
 	ret = sysdev_class_register(&lge_touch_sys_class);
 	if (ret < 0) {
@@ -3879,7 +4090,7 @@ static int touch_remove(struct i2c_client *client)
 	/* Specific device remove */
 	if (touch_device_func->remove)
 		touch_device_func->remove(ts->client);
-
+	release_all_ts_event(ts);
 	/* Power off */
 	touch_power_cntl(ts, POWER_OFF);
 
@@ -3908,7 +4119,9 @@ static int touch_remove(struct i2c_client *client)
 		hrtimer_cancel(&hr_touch_trigger_timer);
 	}
 #endif
-
+#ifdef MULTI_GHOST_DETECT
+	cancel_delayed_work_sync(&ts->work_multi_ghost);
+#endif
 	input_unregister_device(ts->input_dev);
 	kfree(ts);
 
@@ -3932,6 +4145,9 @@ static void touch_early_suspend(struct early_suspend *h)
 #ifdef CUST_G_TOUCH
 	if (ts->pdata->role->ghost_detection_enable) {
 		resume_flag = 0;
+#ifdef LCD_ON_GHOST
+		lcd_on_flag = 0;
+#endif
 	}
 #endif
 
@@ -3943,6 +4159,9 @@ static void touch_early_suspend(struct early_suspend *h)
 	if (ts->pdata->role->ghost_detection_enable) {
 		hrtimer_cancel(&hr_touch_trigger_timer);
 	}
+#endif
+#ifdef MULTI_GHOST_DETECT
+		cancel_delayed_work_sync(&ts->work_multi_ghost);
 #endif
 
 	cancel_work_sync(&ts->work);
@@ -3967,12 +4186,15 @@ static void touch_late_resume(struct early_suspend *h)
 		TOUCH_INFO_MSG("late_resume is not executed\n");
 		return;
 	}
-
+	release_all_ts_event(ts);
 	touch_power_cntl(ts, ts->pdata->role->resume_pwr);
 #ifdef CUST_G_TOUCH
 	if (ts->pdata->role->ghost_detection_enable) {
 		resume_flag = 1;
 		ts_rebase_count = 0;
+#ifdef LCD_ON_GHOST
+		lcd_on_flag = 1;
+#endif
 	}
 #endif
 
