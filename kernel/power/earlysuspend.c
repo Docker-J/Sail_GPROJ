@@ -342,8 +342,13 @@ static inline void log_resume(enum log_resume_step step)
 	msec = ts_sub.tv_sec + ts_sub.tv_nsec / NSEC_PER_MSEC;
 
 	record->count++;
+#ifdef CONFIG_LGE_PM
+	record->avg = ((record->avg * (record->count -1)) + msec)
+							/ (record->count);
+#else
 	record->avg = ((record->avg * record->count) + msec)
 							/ (record->count);
+#endif
 	if (msec > record->max)
 		record->max = msec;
 
@@ -362,8 +367,13 @@ static inline void late_resume_call_chain(struct early_suspend *pos)
 	ts_sub = timespec_sub(ts_exit, ts_entry);
 	msec = ts_sub.tv_sec + ts_sub.tv_nsec / NSEC_PER_MSEC;
 	pos->resume_count++;
+#ifdef CONFIG_LGE_PM
+	pos->resume_avg = ((pos->resume_avg * (pos->resume_count -1)) + msec)
+							/ (pos->resume_count);
+#else
 	pos->resume_avg = ((pos->resume_avg * pos->resume_count) + msec)
 							/ (pos->resume_count);
+#endif
 	if (msec > pos->resume_max)
 		pos->resume_max = msec;
 }
@@ -380,8 +390,13 @@ static inline void early_suspend_call_chain(struct early_suspend *pos)
 	ts_sub = timespec_sub(ts_exit, ts_entry);
 	msec = ts_sub.tv_sec + ts_sub.tv_nsec / NSEC_PER_MSEC;
 	pos->suspend_count++;
+#ifdef CONFIG_LGE_PM
+	pos->suspend_avg = ((pos->suspend_avg * (pos->suspend_count-1)) + msec)
+							/ (pos->suspend_count);
+#else
 	pos->suspend_avg = ((pos->suspend_avg * pos->suspend_count) + msec)
 							/ (pos->suspend_count);
+#endif
 	if (msec > pos->suspend_max)
 		pos->suspend_max = msec;
 }
