@@ -287,11 +287,6 @@ abort:
 	mutex_unlock(&early_suspend_lock);
 	save_lateresume_step(LATERESUME_END);  // LGE_UPDATE
 
-#ifdef CONFIG_MACH_LGE
-	end_monitor_blocking(late_resume_monitor_id);
-#endif
-}
-
 #ifdef CONFIG_SPEEDUP_KEYRESUME
 	if (!(unlikely(earlysuspend_old_policy == SCHED_FIFO) || unlikely(earlysuspend_old_policy == SCHED_RR))) {
 		earlysuspend_v.sched_priority = earlysuspend_old_prio;
@@ -299,6 +294,11 @@ abort:
 			printk(KERN_ERR "late_resume: down late_resume failed\n");
 	}
 #endif
+
+#ifdef CONFIG_MACH_LGE
+	end_monitor_blocking(late_resume_monitor_id);
+#endif
+}
 
 void request_suspend_state(suspend_state_t new_state)
 {
