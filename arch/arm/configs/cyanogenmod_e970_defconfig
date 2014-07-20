@@ -1,6 +1,10 @@
 #
 # Automatically generated file; DO NOT EDIT.
+<<<<<<< HEAD:arch/arm/configs/cyanogenmod_e970_defconfig
 # Linux/arm 3.4.82 Kernel Configuration
+=======
+# Linux/arm 3.4.99 Kernel Configuration
+>>>>>>> 4fe247d... arm: mach-msm: Remove unnecessary msm_rq_stats code:arch/arm/configs/mako_oc_config
 #
 CONFIG_ARM=y
 CONFIG_ARM_HAS_SG_CHAIN=y
@@ -541,7 +545,10 @@ CONFIG_MSM_WATCHDOG=y
 CONFIG_MSM_DLOAD_MODE=y
 CONFIG_MSM_JTAG=y
 # CONFIG_MSM_SLEEP_STATS_DEVICE is not set
+<<<<<<< HEAD:arch/arm/configs/cyanogenmod_e970_defconfig
 CONFIG_MSM_RUN_QUEUE_STATS=y
+=======
+>>>>>>> 4fe247d... arm: mach-msm: Remove unnecessary msm_rq_stats code:arch/arm/configs/mako_oc_config
 # CONFIG_MSM_STANDALONE_POWER_COLLAPSE is not set
 # CONFIG_MSM_GSBI9_UART is not set
 CONFIG_MSM_SHOW_RESUME_IRQ=y
