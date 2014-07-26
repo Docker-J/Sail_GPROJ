@@ -2758,7 +2758,6 @@ static struct platform_device *common_devices[] __initdata = {
         &pm_gpio_leds_device,
 #endif
 	&adsp_loader_device,
-	&apq8064_msm_mpd_device,
 };
 
 static struct platform_device *cdp_devices[] __initdata = {
